@@ -24,10 +24,10 @@
 //
 // ACE-Step GGUFs ship in BF16, Q8_0, Q4_K_M, Q5_K_M, and Q6_K. On CUDA the
 // backend encode cast handles F32 -> BF16 and F32 -> Q8_0 directly; the
-// K-quants have no F32 -> native kernel so the graph terminates at F32 and
-// ggml_quantize_chunk completes the job on host. Either way the base upload
-// PCIe is cut vs a prior F32 upload, and the dequant, add, BF16 round and
-// DoRA rescale all run on the backend.
+// K-quants have no kernel either way: their base is decoded to F32 on host,
+// the graph terminates at F32 and ggml_quantize_chunk completes the job on
+// host, both split over all cores. The add, BF16 round and DoRA rescale run
+// on the backend for every type.
 // PendingCopy lookup is O(1) via hashmap.
 
 #include "adapter-stack.h"
@@ -47,12 +47,14 @@
 #    endif
 #endif
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <functional>
 #include <map>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <vector>
 
@@ -221,6 +223,27 @@ static int adapter_read_lokr_dim(const STFile & st) {
     return dim;
 }
 
+// Runs fn(r0, r1) over [0, nrows) in contiguous row ranges on all cores. The
+// host decode and requant of a K-quant tensor is the slow part of a merge;
+// rows are independent, so each thread takes its own range.
+static void adapter_for_row_ranges(int64_t nrows, const std::function<void(int64_t, int64_t)> & fn) {
+    int64_t threads = (int64_t) std::thread::hardware_concurrency();
+    threads         = (std::max<int64_t>)(1, (std::min<int64_t>)(threads, nrows));
+    if (threads == 1) {
+        fn(0, nrows);
+        return;
+    }
+    std::vector<std::thread> pool;
+    int64_t                  step = (nrows + threads - 1) / threads;
+    for (int64_t r0 = 0; r0 < nrows; r0 += step) {
+        int64_t r1 = (std::min)(nrows, r0 + step);
+        pool.emplace_back([&fn, r0, r1] { fn(r0, r1); });
+    }
+    for (auto & t : pool) {
+        t.join();
+    }
+}
+
 // Requant F32 data back to original type. Writes into dst buffer.
 // Returns the number of bytes written. Used only as host fallback when the
 // backend lacks an F32 -> native cast kernel (K-quants on CUDA today).
@@ -237,7 +260,10 @@ static size_t adapter_requant(const float * src, void * dst, int64_t nel, int64_
         // quantized types: use ggml_quantize_chunk (handles block alignment)
         int64_t nrows = nel / n_per_row;
         size_t  qsize = ggml_row_size(type, n_per_row) * (size_t) nrows;
-        ggml_quantize_chunk(type, src, dst, 0, nrows, n_per_row, NULL);
+        ggml_quantize_init(type);
+        adapter_for_row_ranges(nrows, [&](int64_t r0, int64_t r1) {
+            ggml_quantize_chunk(type, src, dst, r0 * n_per_row, r1 - r0, n_per_row, NULL);
+        });
         return qsize;
     }
 
@@ -266,6 +292,23 @@ static bool adapter_backend_can_encode(ggml_backend_t backend, enum ggml_type ty
     struct ggml_context *   ctx    = ggml_init(params);
     struct ggml_tensor *    src    = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 32);
     struct ggml_tensor *    dst    = ggml_cast(ctx, src, type);
+    bool                    ok     = ggml_backend_supports_op(backend, dst);
+    ggml_free(ctx);
+    return ok;
+}
+
+// True when the backend has a native -> F32 decode cast kernel for this type.
+// CUDA has none for the K-quants (Q4_K, Q5_K, Q6_K): the caller then decodes
+// the base on host and uploads it as F32.
+static bool adapter_backend_can_decode(ggml_backend_t backend, enum ggml_type type) {
+    if (type == GGML_TYPE_F32) {
+        return true;
+    }
+    size_t                  meta   = ggml_tensor_overhead() * 4 + 1024;
+    struct ggml_init_params params = { meta, NULL, true };
+    struct ggml_context *   ctx    = ggml_init(params);
+    struct ggml_tensor *    src    = ggml_new_tensor_1d(ctx, type, ggml_blck_size(type));
+    struct ggml_tensor *    dst    = ggml_cast(ctx, src, GGML_TYPE_F32);
     bool                    ok     = ggml_backend_supports_op(backend, dst);
     ggml_free(ctx);
     return ok;
@@ -385,6 +428,7 @@ static bool adapter_merge_on_backend(WeightCtx *                                
     int64_t nel       = ne0 * ne1;
     size_t  base_nb   = ggml_row_size(ttype, ne0) * (size_t) ne1;
     bool    encode_ok = adapter_backend_can_encode(backend, ttype);
+    bool    decode_ok = adapter_backend_can_decode(backend, ttype);
 
     // slack for the largest graph (DoRA + BF16 round + cast in/out + caller subgraph)
     size_t                  meta   = ggml_tensor_overhead() * 64 + ggml_graph_overhead() + 32 * 1024;
@@ -394,9 +438,11 @@ static bool adapter_merge_on_backend(WeightCtx *                                
         return false;
     }
 
-    // base uploaded in native type, dequant to F32 on backend via ggml_cast
-    struct ggml_tensor * tbase_native = ggml_new_tensor_2d(ctx, ttype, ne0, ne1);
-    struct ggml_tensor * tbase_f32    = ggml_cast(ctx, tbase_native, GGML_TYPE_F32);
+    // base uploaded in native type and dequantized to F32 on backend via
+    // ggml_cast, or dequantized on host when the backend cannot decode it
+    struct ggml_tensor * tbase_native = decode_ok ? ggml_new_tensor_2d(ctx, ttype, ne0, ne1) : NULL;
+    struct ggml_tensor * tbase_f32 =
+        decode_ok ? ggml_cast(ctx, tbase_native, GGML_TYPE_F32) : ggml_new_tensor_2d(ctx, GGML_TYPE_F32, ne0, ne1);
 
     // DoRA scale vector, one F32 per output row when dora_scale is set
     struct ggml_tensor * tds = ds ? ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 1, ne1) : NULL;
@@ -442,7 +488,23 @@ static bool adapter_merge_on_backend(WeightCtx *                                
 
     // helper-owned uploads: base in native type from mmap, ds if DoRA
     // the current weight: the file's, or the previous adapter's merge result
-    ggml_backend_tensor_set(tbase_native, pc->src, 0, base_nb);
+    if (decode_ok) {
+        ggml_backend_tensor_set(tbase_native, pc->src, 0, base_nb);
+    } else {
+        const struct ggml_type_traits * traits = ggml_get_type_traits(ttype);
+        if (!traits->to_float) {
+            fprintf(stderr, "[Adapter] WARNING: no decode for type %d of %s\n", (int) ttype, gguf_name);
+            ggml_backend_buffer_free(buf);
+            ggml_free(ctx);
+            return false;
+        }
+        std::vector<float> base_f32((size_t) nel);
+        size_t             row_nb = ggml_row_size(ttype, ne0);
+        adapter_for_row_ranges(ne1, [&](int64_t r0, int64_t r1) {
+            traits->to_float((const char *) pc->src + (size_t) r0 * row_nb, base_f32.data() + r0 * ne0, (r1 - r0) * ne0);
+        });
+        ggml_backend_tensor_set(tbase_f32, base_f32.data(), 0, (size_t) nel * sizeof(float));
+    }
     if (tds) {
         ggml_backend_tensor_set(tds, ds, 0, (size_t) ne1 * sizeof(float));
     }

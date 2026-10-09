@@ -34,6 +34,11 @@ void request_init(AceRequest * r) {
     r->lm_top_p                 = 0.9f;
     r->lm_top_k                 = 0;
     r->lm_negative_prompt       = "";
+    r->lm_rep_penalty           = 1.0f;
+    r->lm_rep_window            = 64;
+    r->lm_rep_mode              = "presence";
+    r->lm_dry_base              = 1.75f;
+    r->lm_dry_min_len           = 3;
     r->lm_seed                  = -1;
     r->use_cot_caption          = true;
     r->audio_codes              = "";
@@ -260,6 +265,21 @@ static void request_parse_obj(yyjson_val * obj, AceRequest * r) {
     }
     if ((v = yyjson_obj_get(obj, "lm_top_k")) && yyjson_is_num(v)) {
         r->lm_top_k = (int) yyjson_get_num(v);
+    }
+    if ((v = yyjson_obj_get(obj, "lm_rep_penalty")) && yyjson_is_num(v)) {
+        r->lm_rep_penalty = (float) yyjson_get_num(v);
+    }
+    if ((v = yyjson_obj_get(obj, "lm_rep_window")) && yyjson_is_num(v)) {
+        r->lm_rep_window = (int) yyjson_get_num(v);
+    }
+    if ((v = yyjson_obj_get(obj, "lm_rep_mode")) && yyjson_is_str(v) && yyjson_get_len(v) > 0) {
+        r->lm_rep_mode = yy_str(v);
+    }
+    if ((v = yyjson_obj_get(obj, "lm_dry_base")) && yyjson_is_num(v)) {
+        r->lm_dry_base = (float) yyjson_get_num(v);
+    }
+    if ((v = yyjson_obj_get(obj, "lm_dry_min_len")) && yyjson_is_num(v)) {
+        r->lm_dry_min_len = (int) yyjson_get_num(v);
     }
     if ((v = yyjson_obj_get(obj, "inference_steps")) && yyjson_is_num(v)) {
         r->inference_steps = (int) yyjson_get_num(v);
@@ -491,6 +511,21 @@ static yyjson_mut_doc * request_build_doc(const AceRequest * r, bool sparse) {
     if (all || r->lm_negative_prompt != def.lm_negative_prompt) {
         yyjson_mut_obj_add_str(doc, root, "lm_negative_prompt", r->lm_negative_prompt.c_str());
     }
+    if (all || r->lm_rep_penalty != def.lm_rep_penalty) {
+        yyjson_mut_obj_add_real(doc, root, "lm_rep_penalty", r->lm_rep_penalty);
+    }
+    if (all || r->lm_rep_window != def.lm_rep_window) {
+        yyjson_mut_obj_add_int(doc, root, "lm_rep_window", r->lm_rep_window);
+    }
+    if (all || r->lm_rep_mode != def.lm_rep_mode) {
+        yyjson_mut_obj_add_str(doc, root, "lm_rep_mode", r->lm_rep_mode.c_str());
+    }
+    if (all || r->lm_dry_base != def.lm_dry_base) {
+        yyjson_mut_obj_add_real(doc, root, "lm_dry_base", r->lm_dry_base);
+    }
+    if (all || r->lm_dry_min_len != def.lm_dry_min_len) {
+        yyjson_mut_obj_add_int(doc, root, "lm_dry_min_len", r->lm_dry_min_len);
+    }
     if (all || r->lm_seed != def.lm_seed) {
         yyjson_mut_obj_add_sint(doc, root, "lm_seed", r->lm_seed);
     }
@@ -700,6 +735,10 @@ void request_dump(const AceRequest * r, FILE * f) {
             r->timesignature.c_str(), r->vocal_language.c_str());
     fprintf(f, "[Request] lm: temp=%.2f cfg=%.1f top_p=%.2f top_k=%d\n", r->lm_temperature, r->lm_cfg_scale,
             r->lm_top_p, r->lm_top_k);
+    if (r->lm_rep_penalty != 1.0f) {
+        fprintf(f, "[Request] lm: rep_penalty=%.3f mode=%s window=%d dry_base=%.2f dry_min_len=%d\n", r->lm_rep_penalty,
+                r->lm_rep_mode.c_str(), r->lm_rep_window, r->lm_dry_base, r->lm_dry_min_len);
+    }
     fprintf(f, "[Request] dit: steps=%d guidance=%.1f shift=%.1f\n", r->inference_steps, r->guidance_scale, r->shift);
     if (r->dcw_scaler > 0.0f || r->dcw_high_scaler > 0.0f) {
         fprintf(f, "[Request] dit: dcw_mode=%s scaler=%.3f high_scaler=%.3f\n", r->dcw_mode.c_str(), r->dcw_scaler,

@@ -486,6 +486,11 @@ their own, but without caption the LLM has nothing to work from.
     "lm_top_p":             0.9,
     "lm_top_k":             0,
     "lm_negative_prompt":   "",
+    "lm_rep_penalty":       1.0,
+    "lm_rep_window":        64,
+    "lm_rep_mode":          "presence",
+    "lm_dry_base":          1.75,
+    "lm_dry_min_len":       3,
     "use_cot_caption":      true,
     "audio_codes":          "",
     "inference_steps":      0,
@@ -694,6 +699,28 @@ Nucleus sampling cutoff. `1.0` disables.
 
 **`lm_top_k`** (int, default `0` = disabled)
 Top-K sampling. `0` disables hard top-K (top_p still applies).
+
+**`lm_rep_penalty`** (float, default `1.0` = off)
+Repetition penalty on the audio codes the LM emitted within the last
+`lm_rep_window` codes, against melodies stuck in a loop (after HOT-Step CPP).
+At `1.0` no logit is touched and the codes are those of a build without it.
+The end-of-codes token is never penalised. About `1.05`-`1.15`.
+
+**`lm_rep_window`** (int, default `64`)
+How many recent codes the penalty looks at. The LM emits 5 codes a second, so
+64 codes is 12.8 seconds.
+
+**`lm_rep_mode`** (string, default `"presence"`)
+`presence` penalises every distinct code in the window once, so it also
+flattens a chorus coming back. `frequency` raises the penalty to the number
+of occurrences (capped at 8), hitting a loop much harder than the music
+around it; use a lower penalty. `dry` penalises only a code that would extend
+a verbatim repeat of at least `lm_dry_min_len` codes, subtracting
+`(lm_rep_penalty - 1) * 8 * lm_dry_base^(match - lm_dry_min_len)`.
+
+**`lm_dry_base`** (float, default `1.75`), **`lm_dry_min_len`** (int, default `3`)
+DRY only: growth per further matched code, and the shortest verbatim repeat
+it acts on. Raise the minimum if sustained textures get chewed up.
 
 **`lm_negative_prompt`** (string, default `""`)
 Negative caption for CFG in phase 2. Empty string falls back to a

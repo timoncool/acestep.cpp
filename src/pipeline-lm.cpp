@@ -20,6 +20,7 @@
 #include <random>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 struct AceLm {
@@ -284,6 +285,108 @@ static std::vector<std::string> generate_phase1_batch(Qwen3LM *                 
     return results;
 }
 
+// Windowed repetition penalty over the audio codes a sequence emitted last,
+// from HOT-Step CPP (scragnog, MIT). At penalty 1.0 it returns before
+// touching a logit. Slot 0 (im_end) is never penalised, so the penalty
+// cannot provoke an early stop.
+enum LmRepMode {
+    LM_REP_PRESENCE  = 0,
+    LM_REP_FREQUENCY = 1,
+    LM_REP_DRY       = 2,
+};
+
+// A sustained pad holds one code for seconds; without a cap FREQUENCY would
+// break it. 8 occurrences = 1.6 s at 5 Hz.
+#define LM_REP_FREQ_MAX_COUNT 8
+#define LM_REP_DRY_MAX_EXP    24
+#define LM_REP_DRY_MAX_MATCH  64
+
+struct CodeRepPenalty {
+    float penalty     = 1.0f;
+    int   window      = 64;
+    int   mode        = LM_REP_PRESENCE;
+    float dry_base    = 1.75f;
+    int   dry_min_len = 3;
+};
+
+static int lm_rep_mode_from_name(const std::string & name) {
+    if (name == "frequency") {
+        return LM_REP_FREQUENCY;
+    }
+    if (name == "dry") {
+        return LM_REP_DRY;
+    }
+    if (!name.empty() && name != "presence") {
+        fprintf(stderr, "[LM-Rep] WARNING unknown lm_rep_mode \"%s\", using \"presence\"\n", name.c_str());
+    }
+    return LM_REP_PRESENCE;
+}
+
+// compact_logits layout: [im_end, code_0, code_1, ...].
+// PRESENCE and FREQUENCY scale (positive logits divided, negative multiplied);
+// DRY subtracts, since division can only pull a positive logit toward 0.
+static void apply_code_rep_penalty(float * compact_logits, const std::vector<int> & codes, const CodeRepPenalty & rep) {
+    if (rep.penalty <= 1.0f || codes.empty() || rep.window <= 0) {
+        return;
+    }
+    const int n     = (int) codes.size();
+    const int start = n > rep.window ? n - rep.window : 0;
+
+    if (rep.mode == LM_REP_DRY) {
+        const int   min_len    = rep.dry_min_len > 1 ? rep.dry_min_len : 1;
+        const float multiplier = (rep.penalty - 1.0f) * 8.0f;
+        const float base       = rep.dry_base > 1.0f ? rep.dry_base : 1.75f;
+
+        // A code reachable from several earlier positions takes its longest match.
+        std::unordered_map<int, int> best_match;
+        for (int j = start + 1; j < n; j++) {
+            int L = 0;
+            while (L < LM_REP_DRY_MAX_MATCH && j - 1 - L >= start && codes[j - 1 - L] == codes[n - 1 - L]) {
+                L++;
+                if (n - 1 - L < start) {
+                    break;
+                }
+            }
+            if (L < min_len) {
+                continue;
+            }
+            auto it = best_match.find(codes[j]);
+            if (it == best_match.end() || L > it->second) {
+                best_match[codes[j]] = L;
+            }
+        }
+        for (const auto & kv : best_match) {
+            int   e   = kv.second - min_len;
+            float sub = multiplier * powf(base, (float) (e < LM_REP_DRY_MAX_EXP ? e : LM_REP_DRY_MAX_EXP));
+            compact_logits[kv.first + 1] -= sub;
+        }
+        return;
+    }
+
+    if (rep.mode == LM_REP_FREQUENCY) {
+        std::unordered_map<int, int> counts;
+        for (int i = start; i < n; i++) {
+            counts[codes[i]]++;
+        }
+        for (const auto & kv : counts) {
+            int     c = kv.second < LM_REP_FREQ_MAX_COUNT ? kv.second : LM_REP_FREQ_MAX_COUNT;
+            float   p = powf(rep.penalty, (float) c);
+            float & l = compact_logits[kv.first + 1];
+            l         = l > 0.0f ? l / p : l * p;
+        }
+        return;
+    }
+
+    std::unordered_set<int> seen;
+    for (int i = start; i < n; i++) {
+        seen.insert(codes[i]);
+    }
+    for (int c : seen) {
+        float & l = compact_logits[c + 1];
+        l         = l > 0.0f ? l / rep.penalty : l * rep.penalty;
+    }
+}
+
 // Batched Phase 2: N sequences, one prompt and one seed per element.
 // Identical prompts are detected and prefilled once with KV copies.
 // Returns N code strings.
@@ -298,7 +401,8 @@ static std::vector<std::string> run_phase2_batch(Qwen3LM *                      
                                                  const char *                   negative_prompt,
                                                  bool                           use_batch_cfg,
                                                  bool (*cancel)(void *),
-                                                 void * cancel_data) {
+                                                 void *                 cancel_data,
+                                                 const CodeRepPenalty & rep) {
     int  N       = (int) aces.size();
     int  V       = m->cfg.vocab_size;
     bool use_cfg = cfg_scale > 1.0f;
@@ -516,6 +620,8 @@ static std::vector<std::string> run_phase2_batch(Qwen3LM *                      
             for (int c = 0; c < AUDIO_CODE_COUNT; c++) {
                 compact_logits[c + 1] = lc[code_offset + c];
             }
+
+            apply_code_rep_penalty(compact_logits.data(), seqs[orig_i].audio_codes, rep);
 
             // CPU samples instantly because it only has to sort ~2049 items instead of 150,000+
             int compact_tok =
@@ -886,8 +992,19 @@ int ace_lm_generate(AceLm *            ctx,
         fprintf(stderr, "[LM-Generate] %s mode, no audio code generation\n",
                 mode == LM_MODE_INSPIRE ? "Inspire" : "Format");
     } else if (!user_has_codes) {
+        CodeRepPenalty rep;
+        rep.penalty     = first.lm_rep_penalty;
+        rep.window      = first.lm_rep_window;
+        rep.mode        = lm_rep_mode_from_name(first.lm_rep_mode);
+        rep.dry_base    = first.lm_dry_base;
+        rep.dry_min_len = first.lm_dry_min_len;
+        if (rep.penalty > 1.0f) {
+            fprintf(stderr, "[LM-Rep] mode=%s penalty=%.3f window=%d (%.1f s) dry_base=%.2f dry_min_len=%d\n",
+                    rep.mode == LM_REP_DRY ? "dry" : (rep.mode == LM_REP_FREQUENCY ? "frequency" : "presence"),
+                    rep.penalty, rep.window, rep.window / 5.0f, rep.dry_base, rep.dry_min_len);
+        }
         batch_codes = run_phase2_batch(model, *bpe, aces, temperature, top_p, top_k, seeds, cfg_scale, neg_prompt,
-                                       ctx->params.use_batch_cfg, cancel, cancel_data);
+                                       ctx->params.use_batch_cfg, cancel, cancel_data, rep);
         if (batch_codes.empty()) {
             return -1;
         }

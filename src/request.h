@@ -40,6 +40,19 @@ struct AceRequest {
     float       lm_top_p;            // 0.9
     int         lm_top_k;            // 0 = disabled (matches Python None)
     std::string lm_negative_prompt;  // ""
+    // Windowed repetition penalty over the audio codes the LM emitted last
+    // (after HOT-Step CPP, MIT). 1.0 is off and leaves the codes untouched.
+    // lm_rep_window counts codes: the LM emits 5 a second, so 64 is 12.8 s.
+    //   "presence"  every distinct code in the window once
+    //   "frequency" penalty^occurrences, occurrences capped at 8
+    //   "dry"       only codes that would extend a verbatim repeat of at
+    //               least lm_dry_min_len codes, growing by lm_dry_base per
+    //               further matched code
+    float       lm_rep_penalty;  // 1.0 (off)
+    int         lm_rep_window;   // 64
+    std::string lm_rep_mode;     // "presence"
+    float       lm_dry_base;     // 1.75
+    int         lm_dry_min_len;  // 3
     int64_t     lm_seed;             // -1 = random. mt19937 consumes the low 32
                                      // bits. Same int64_t storage trick as seed
                                      // above: rd() lands positive, no -1

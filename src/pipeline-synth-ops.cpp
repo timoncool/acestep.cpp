@@ -394,8 +394,8 @@ void ops_encode_timbre(const AceSynth * ctx,
     // timbre_window. Without either input the timbre falls back to a
     // single silence frame, disabling timbre conditioning.
     if (ref_latents && ref_T_latent > 0) {
-        s.timbre_feats   = timbre_window(ref_latents, ref_T_latent, 64, 25);
-        s.S_ref_timbre   = (int) (s.timbre_feats.size() / 64);
+        s.timbre_feats = timbre_window(ref_latents, ref_T_latent, 64, 25);
+        s.S_ref_timbre = (int) (s.timbre_feats.size() / 64);
         fprintf(stderr, "[Encode-Timbre] Latents in: %d frames (%.1fs), %d frames of them, VAE encode skipped\n",
                 ref_T_latent, (float) ref_T_latent / 25.0f, s.S_ref_timbre);
         return;
@@ -411,8 +411,8 @@ void ops_encode_timbre(const AceSynth * ctx,
         }
         ModelHandle ref_vae_guard(ctx->store, ref_vae);
 
-        std::vector<float> win     = timbre_window(ref_audio, ref_len, 2, 48000);
-        int                win_len = (int) (win.size() / 2);
+        std::vector<float> win       = timbre_window(ref_audio, ref_len, 2, 48000);
+        int                win_len   = (int) (win.size() / 2);
         int                max_T_ref = (win_len / 1920) + 64;
         std::vector<float> ref_lat_buf(max_T_ref * 64);
         int                T_ref = vae_enc_encode_tiled(ref_vae, win.data(), win_len, ref_lat_buf.data(), max_T_ref,

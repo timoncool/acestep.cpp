@@ -180,9 +180,11 @@ static struct ggml_tensor * vae_enc_build_graph(struct ggml_context * ctx,
     return x;  // [T_latent, 128]
 }
 
-// Activations an encode graph asks per latent frame of its window; above what
-// the device reports free, the encoder tiles at 256 frames.
-#define VAE_ENC_GRAPH_BYTES_PER_FRAME ((size_t) 10 << 20)
+// Activations an encode graph asks per latent frame of its window, with a
+// tenth on top: the F32 compute buffer grows by 6389760 bytes a frame and has
+// no constant part. Above what the device reports free, the encoder tiles at
+// 256 frames.
+#define VAE_ENC_GRAPH_BYTES_PER_FRAME ((size_t) 6389760 * 11 / 10)
 
 // Core compute: build/cache graph, set input, run. Returns T_latent, -1 on
 // error, or VAE_GRAPH_NO_FIT when the device cannot hold the graph.

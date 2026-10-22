@@ -587,8 +587,7 @@ static int vae_ggml_decode_tiled(VAEGGML *     m,
                                  int           overlap    = 64,
                                  bool (*cancel)(void *)   = nullptr,
                                  void * cancel_data       = nullptr) {
-    // One decode graph wants roughly 10 MB of activations per latent frame
-    // (HOT-Step #186: 726 frames asked for 6.78 GB and took a 4 GB card down).
+    // One decode graph wants roughly 10 MB of activations per latent frame.
     // A short track decodes untiled and a long one in chunk_size tiles, so
     // either graph is min(T_latent, chunk_size) frames: when the device cannot
     // hold it, tile at 256.

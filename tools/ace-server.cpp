@@ -64,6 +64,7 @@
 #include <cstring>
 #include <deque>
 #include <functional>
+#include <future>
 #include <memory>
 #include <mutex>
 #include <random>
@@ -1686,7 +1687,7 @@ static void usage(const char * prog) {
             "Memory control:\n"
             "  --device <name>         Compute device: CUDA0, Vulkan0, MTL0, CPU...\n"
             "                          (default: best available)\n"
-            "  --keep-loaded           Keep models in VRAM between requests\n"
+            "  --keep-loaded           Keep models in VRAM between requests (POST /evict unloads them)\n"
             "  --vae-chunk <N>         Latent frames per tile (default: %d)\n"
             "  --vae-overlap <N>       Overlap frames per side (default: %d)\n"
             "\n"
@@ -1702,6 +1703,29 @@ static void usage(const char * prog) {
             "  --no-batch-cfg          Split CFG into two separate forwards (LM + DiT)\n"
             "  --clamp-fp16            Clamp hidden states to FP16 range\n",
             prog, synth_d.vae_chunk, synth_d.vae_overlap, g_max_batch, lm_d.max_seq);
+}
+
+// POST /evict: unloads every model no job holds. It runs in the work queue, so
+// it never meets a job half way; the next request loads what it needs again.
+static void handle_evict(const httplib::Request &, httplib::Response & res) {
+    auto                done   = std::make_shared<std::promise<std::pair<size_t, int>>>();
+    std::future<std::pair<size_t, int>> result = done->get_future();
+    work_push([done] {
+        size_t freed = store_evict_idle(g_store);
+        g_loaded_lm.clear();
+        g_loaded_dit.clear();
+        g_loaded_adapter.clear();
+        g_loaded_adapter_scale = 1.0f;
+        g_loaded_und_dit.clear();
+        g_loaded_vae.clear();
+        done->set_value({ freed, store_gpu_module_count(g_store) });
+    });
+    std::pair<size_t, int> evicted = result.get();
+    double                 freed_mb = (double) evicted.first / (1024.0 * 1024.0);
+    fprintf(stderr, "[Server] Evict: %.1f MB freed, %d modules left\n", freed_mb, evicted.second);
+    char body[96];
+    snprintf(body, sizeof(body), "{\"freed_mb\":%.1f,\"modules\":%d}", freed_mb, evicted.second);
+    res.set_content(body, "application/json");
 }
 
 int main(int argc, char ** argv) {
@@ -1882,6 +1906,7 @@ int main(int argc, char ** argv) {
     svr.Post("/synth", handle_synth);
     svr.Post("/understand", handle_understand);
     svr.Post("/vae", handle_vae);
+    svr.Post("/evict", handle_evict);
     svr.Get("/health", [](const httplib::Request &, httplib::Response & res) {
         res.set_content("{\"status\":\"ok\"}", "application/json");
     });

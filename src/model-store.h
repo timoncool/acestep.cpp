@@ -120,6 +120,11 @@ DetokGGML *  store_require_fsq_detok(ModelStore * s, const ModelKey & k);
 // must not be used: in EVICT_STRICT it may be unloaded immediately.
 void store_release(ModelStore * s, void * handle);
 
+// Unloads every GPU module no pipeline holds (refcount 0), whatever the
+// policy: a store kept loaded gives its memory back on request. Returns the
+// bytes freed.
+size_t store_evict_idle(ModelStore * s);
+
 // CPU-resident accessors. Loaded on first call, kept forever, never evicted.
 // All small (a few MB total). Return NULL on load failure.
 BPETokenizer *  store_bpe(ModelStore * s, const char * lm_path);

@@ -622,6 +622,27 @@ const DiTMeta * store_dit_meta(ModelStore * s, const char * dit_path) {
     return meta;
 }
 
+size_t store_evict_idle(ModelStore * s) {
+    if (!s) {
+        return 0;
+    }
+    std::lock_guard<std::mutex> lock(s->mtx);
+    size_t                      freed = 0;
+    for (auto it = s->gpu.begin(); it != s->gpu.end();) {
+        GpuEntry & e = it->second;
+        if (e.refcount > 0) {
+            ++it;
+            continue;
+        }
+        fprintf(stderr, "[Store] Evict %s (%.1f MB)\n", e.label, (float) e.bytes / (1024.0f * 1024.0f));
+        freed += e.bytes;
+        s->handle_to_key.erase(e.ptr);
+        e.deleter(e.ptr);
+        it = s->gpu.erase(it);
+    }
+    return freed;
+}
+
 size_t store_vram_bytes(const ModelStore * s) {
     if (!s) {
         return 0;

@@ -108,7 +108,7 @@ struct LmAdapterCfgInfo {
 
 static LmAdapterCfgInfo lm_adapter_read_cfg(const std::string & dir) {
     LmAdapterCfgInfo out;
-    std::string      cfg_path = dir + "/adapter_config.json";
+    std::string      cfg_path = dir + REGISTRY_SEP "adapter_config.json";
     yyjson_doc *     doc      = yyjson_read_file(cfg_path.c_str(), 0, NULL, NULL);
     if (!doc) {
         return out;
@@ -295,7 +295,7 @@ static LMLora * lm_adapter_load(const char * path, float user_scale, ggml_backen
         dir          = (slash == std::string::npos) ? "." : p.substr(0, slash);
     } else {
         dir          = p;
-        sf_path      = p + "/adapter_model.safetensors";
+        sf_path      = p + REGISTRY_SEP "adapter_model.safetensors";
         // A LoKr adapter dir has no PEFT file at all — the weights live in
         // lokr_weights.safetensors and there is deliberately no
         // adapter_config.json (alpha rides the per-module tensors instead).
@@ -303,7 +303,7 @@ static LMLora * lm_adapter_load(const char * path, float user_scale, ggml_backen
         if (probe) {
             fclose(probe);
         } else {
-            sf_path     = p + "/lokr_weights.safetensors";
+            sf_path     = p + REGISTRY_SEP "lokr_weights.safetensors";
             FILE * lokr = fopen(sf_path.c_str(), "rb");
             if (lokr) {
                 fclose(lokr);

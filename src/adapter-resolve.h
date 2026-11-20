@@ -61,7 +61,7 @@ static void adapter_classify(const std::string & path, bool * dit, bool * lm) {
     std::string file = path;
     struct stat sb;
     if (stat(path.c_str(), &sb) == 0 && S_ISDIR(sb.st_mode)) {
-        const char * names[] = { "/adapter_model.safetensors", "/lokr_weights.safetensors" };
+        const char * names[] = { REGISTRY_SEP "adapter_model.safetensors", REGISTRY_SEP "lokr_weights.safetensors" };
         file.clear();
         for (const char * n : names) {
             if (stat((path + n).c_str(), &sb) == 0) {

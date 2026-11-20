@@ -138,7 +138,7 @@ static bool lora_is_b(const std::string & key) {
 // Read adapter_config.json for alpha. Returns alpha or 0 if not found.
 // Rank is always read from the actual tensor shapes (more reliable).
 static int adapter_read_alpha(const char * dir) {
-    std::string path = std::string(dir) + "/adapter_config.json";
+    std::string path = std::string(dir) + REGISTRY_SEP "adapter_config.json";
 
     FILE * f = fopen(path.c_str(), "rb");
     if (!f) {
@@ -1035,7 +1035,7 @@ static std::string adapter_single_weights(const char * dir) {
     int         n = 0;
     for (const auto & f : names) {
         if (f.size() > 12 && f.compare(f.size() - 12, 12, ".safetensors") == 0) {
-            found = std::string(dir) + "/" + f;
+            found = std::string(dir) + REGISTRY_SEP + f;
             n++;
         }
     }
@@ -1068,10 +1068,10 @@ static bool adapter_merge(WeightCtx *                wctx,
     if (S_ISDIR(sb.st_mode)) {
         // PEFT directory with adapter_model.safetensors, or a LoKr directory
         // with lokr_weights.safetensors (alpha rides the tensors, no config).
-        sf_path = std::string(adapter_path) + "/adapter_model.safetensors";
+        sf_path = std::string(adapter_path) + REGISTRY_SEP "adapter_model.safetensors";
         cfg_dir = adapter_path;
         if (stat(sf_path.c_str(), &sb) != 0) {
-            std::string lokr_path = std::string(adapter_path) + "/lokr_weights.safetensors";
+            std::string lokr_path = std::string(adapter_path) + REGISTRY_SEP "lokr_weights.safetensors";
             if (stat(lokr_path.c_str(), &sb) == 0) {
                 sf_path = lokr_path;
             } else {
@@ -1084,7 +1084,7 @@ static bool adapter_merge(WeightCtx *                wctx,
         }
         // warn if adapter_config.json is missing, alpha lives there for PEFT so
         // the merge silently falls back to alpha=rank (scaling=1) otherwise
-        std::string cfg_path = cfg_dir + "/adapter_config.json";
+        std::string cfg_path = cfg_dir + REGISTRY_SEP "adapter_config.json";
         bool        is_lokr =
             sf_path.size() >= 24 && sf_path.compare(sf_path.size() - 24, 24, "lokr_weights.safetensors") == 0;
         if (!is_lokr && stat(cfg_path.c_str(), &sb) != 0) {

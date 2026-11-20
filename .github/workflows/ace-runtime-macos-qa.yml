@@ -1,0 +1,42 @@
+name: Package ACE 6e0e414 macOS Metal runtime
+on:
+  push:
+    branches: [music-round-ace-6e0e414-macos-qa]
+permissions:
+  contents: read
+jobs:
+  engine:
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build using the Studio engine recipe
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = arm64
+          export STUDIO_ENGINE_BUILD_ROOT="$RUNNER_TEMP/ace-engine-build"
+          mkdir -p "$STUDIO_ENGINE_BUILD_ROOT" staged
+          bash qa-ace-studio/scripts/build-engine-runtime.sh "$PWD/staged"
+          test "$(git -C "$STUDIO_ENGINE_BUILD_ROOT/ace-engine" rev-parse HEAD)" = 6e0e414ec1131da7c0724adb1079d581bbf6cbf3
+          test "$(git -C "$STUDIO_ENGINE_BUILD_ROOT/ace-engine/ggml" rev-parse HEAD)" = 0b9ecc5db1d0853bcd554eb23fba65d0b4f2113f
+          grep -Fx 'GGML_METAL:BOOL=ON' "$STUDIO_ENGINE_BUILD_ROOT/ace-engine/build/CMakeCache.txt"
+      - name: Validate the packed engine
+        run: |
+          set -euo pipefail
+          name=ace-runtime-6e0e414-macos-arm64.tar.gz
+          mkdir -p packaged extracted
+          tar -C staged -czf "packaged/$name" .
+          tar -C extracted -xzf "packaged/$name"
+          test "$(lipo -archs extracted/ace-server)" = arm64
+          for lib in extracted/*; do
+            if [[ ! -L "$lib" ]]; then otool -L "$lib"; fi
+          done
+          extracted/ace-server --help > /tmp/ace-runtime-help.txt 2>&1 || true
+          grep -F 'acestep.cpp 6e0e414' /tmp/ace-runtime-help.txt
+          grep -F 'Usage:' /tmp/ace-runtime-help.txt
+          (cd packaged && shasum -a 256 "$name" | tee SHA256SUMS.txt)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ace-runtime-6e0e414-macos-arm64
+          path: packaged/
+          if-no-files-found: error

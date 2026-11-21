@@ -24,6 +24,7 @@
 #        define WIN32_LEAN_AND_MEAN
 #    endif
 #    include <windows.h>
+#    include <filesystem>
 #else
 #    include <dirent.h>
 #    include <sys/stat.h>
@@ -243,6 +244,30 @@ static bool registry_scan(ModelRegistry * reg, const char * models_dir) {
 // - subdirectories containing lokr_weights.safetensors: LoKr (ace-train)
 // returns true if at least one adapter was found.
 static bool registry_scan_adapters(ModelRegistry * reg, const char * adapters_dir, bool verbose = true) {
+#ifdef _WIN32
+    // A short input root can still contain weights beyond MAX_PATH. Resolve
+    // drive/UNC paths before opting out of Win32 path normalization, and keep
+    // the verbatim spelling Studio already passes.
+    namespace fs = std::filesystem;
+    std::string adapter_root = adapters_dir;
+    if (adapter_root.compare(0, 4, "\\\\?\\") != 0 && adapter_root.compare(0, 4, "\\\\.\\") != 0) {
+        std::error_code error;
+        fs::path absolute = fs::absolute(fs::u8path(adapter_root), error);
+        if (error) {
+            return false;
+        }
+        adapter_root = absolute.lexically_normal().make_preferred().u8string();
+        if (adapter_root.compare(0, 2, "\\\\") == 0) {
+            adapter_root = "\\\\?\\UNC\\" + adapter_root.substr(2);
+        } else {
+            adapter_root = "\\\\?\\" + adapter_root;
+        }
+    }
+    while (adapter_root.size() > 4 && adapter_root.back() == '\\') {
+        adapter_root.pop_back();
+    }
+    adapters_dir = adapter_root.c_str();
+#endif
     int count = 0;
 
     // single .safetensors files

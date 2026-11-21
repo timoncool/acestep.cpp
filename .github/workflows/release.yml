@@ -59,7 +59,9 @@ jobs:
             exit 1
           fi
           matrix=$(printf '%s\n' "${packages[@]}" | jq -cs '{include: .}')
-          printf 'tag=%s\nref=%s\nmatrix=%s\n' "$TAG" "${TAG:-$GITHUB_SHA}" "$matrix" >> "$GITHUB_OUTPUT"
+          ref="$GITHUB_SHA"
+          if [[ -n "$TAG" ]]; then ref="refs/tags/$TAG"; fi
+          printf 'tag=%s\nref=%s\nmatrix=%s\n' "$TAG" "$ref" "$matrix" >> "$GITHUB_OUTPUT"
 
   build:
     needs: select

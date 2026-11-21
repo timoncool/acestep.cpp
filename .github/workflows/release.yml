@@ -102,7 +102,8 @@ jobs:
           set -euo pipefail
           flags=(-G Ninja -DCMAKE_BUILD_TYPE=Release)
           if [[ "$RUNNER_OS" == macOS ]]; then
-            flags+=(-DCMAKE_OSX_ARCHITECTURES=arm64 -DGGML_METAL=ON -DGGML_METAL_EMBED_LIBRARY=ON
+            flags+=(-DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_DEPLOYMENT_TARGET=13.0
+                    -DGGML_METAL=ON -DGGML_METAL_EMBED_LIBRARY=ON
                     -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON -DCMAKE_INSTALL_RPATH=@loader_path)
           else
             nvcc --version
@@ -128,15 +129,33 @@ jobs:
           case "$RUNNER_OS" in
             Windows)
               cp build/*.dll dist/
-              test -f dist/ggml-cuda.dll && test -f dist/ggml-vulkan.dll
+              test -f dist/ggml-cuda.dll
+              test -f dist/ggml-vulkan.dll
               ;;
             Linux)
               cp -P build/libggml*.so* dist/
+              test -f dist/libggml-cuda.so
+              test -f dist/libggml-vulkan.so
               readelf -d dist/ace-server | grep -F '$ORIGIN'
               ;;
             macOS)
-              cp -P build/libggml*.dylib dist/
-              test "$(lipo -archs dist/ace-server)" = arm64
+              cp -P build/libggml*.dylib build/libacestep*.a dist/
+              for file in dist/*; do
+                if [[ -L "$file" ]]; then continue; fi
+                test "$(lipo -archs "$file")" = arm64
+                otool -l "$file" | awk '
+                  $1 == "cmd" { cmd = $2 }
+                  cmd == "LC_BUILD_VERSION" && $1 == "minos" ||
+                  cmd == "LC_VERSION_MIN_MACOSX" && $1 == "version" {
+                    if ($2 != "13.0") { print FILENAME ": unexpected minimum macOS " $2; bad = 1 }
+                    seen = 1
+                  }
+                  cmd == "LC_RPATH" && $1 == "path" && $2 ~ /^\// {
+                    print FILENAME ": absolute rpath " $2; bad = 1
+                  }
+                  END { exit (bad || !seen) }
+                '
+              done
               ;;
           esac
           "dist/ace-server$ext" --help > usage.txt 2>&1 || test "$?" -eq 1

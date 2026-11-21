@@ -1,0 +1,39 @@
+name: Exact Windows ACE server for Universal recovery
+on:
+  push:
+    branches: [qa/ace-native-server-pe-windows]
+permissions:
+  contents: read
+jobs:
+  server:
+    runs-on: windows-2022
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: d058cd86564abbad2d1d49a1d79e3eae87688d2a
+          submodules: recursive
+      - uses: ilammy/msvc-dev-cmd@v1
+      - shell: pwsh
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DGGML_NATIVE=OFF -DGGML_BACKEND_DL=ON -DGGML_CPU_ALL_VARIANTS=OFF -DGGML_CUDA=OFF -DGGML_VULKAN=OFF
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cmake --build build --parallel 4 --target ace-server test-adapter-path
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & ./build/test-adapter-path.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          dumpbin /dependents ./build/ace-server.exe | Set-Content -Encoding utf8NoBOM native-dependents.txt
+          @{
+            revision = (git rev-parse HEAD)
+            ggml_revision = (git -C ggml rev-parse HEAD)
+            exe_sha256 = (Get-FileHash ./build/ace-server.exe -Algorithm SHA256).Hash
+          } | ConvertTo-Json | Set-Content -Encoding utf8NoBOM native-receipt.json
+          Compress-Archive -Path ./build/ace-server.exe -DestinationPath acestep-windows-x64.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ace-native-server-pe-windows
+          retention-days: 3
+          path: |
+            acestep-windows-x64.zip
+            native-dependents.txt
+            native-receipt.json

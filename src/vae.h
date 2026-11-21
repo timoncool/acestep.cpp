@@ -71,15 +71,15 @@ static void vae_fuse_wn(struct ggml_tensor * dst, const GGUFModel & gf, const st
     int                  fan    = (int) (ggml_nelements(mv) / dim0);
     std::vector<float>   w(dim0 * fan);
     for (int d = 0; d < dim0; d++) {
-        float gv  = ggml_bf16_to_fp32(*(const ggml_bf16_t *) &g[d]);
+        float gv  = ggml_bf16_to_fp32(ggml_bf16_t{ g[d] });
         float nsq = 0;
         for (int i = 0; i < fan; i++) {
-            float vv = ggml_bf16_to_fp32(*(const ggml_bf16_t *) &v[d * fan + i]);
+            float vv = ggml_bf16_to_fp32(ggml_bf16_t{ v[d * fan + i] });
             nsq += vv * vv;
         }
         float s = gv / (sqrtf(nsq) + 1e-12f);
         for (int i = 0; i < fan; i++) {
-            float vv       = ggml_bf16_to_fp32(*(const ggml_bf16_t *) &v[d * fan + i]);
+            float vv       = ggml_bf16_to_fp32(ggml_bf16_t{ v[d * fan + i] });
             w[d * fan + i] = vv * s;
         }
     }
@@ -106,15 +106,15 @@ static void vae_fuse_wn_ct(struct ggml_tensor * dst, const GGUFModel & gf, const
     int                  fan    = (int) (ggml_nelements(mv) / dim0);  // K * OC
     std::vector<float>   w(dim0 * fan);
     for (int d = 0; d < dim0; d++) {                                  // d = ic
-        float gv  = ggml_bf16_to_fp32(*(const ggml_bf16_t *) &g[d]);
+        float gv  = ggml_bf16_to_fp32(ggml_bf16_t{ g[d] });
         float nsq = 0;
         for (int i = 0; i < fan; i++) {
-            float vv = ggml_bf16_to_fp32(*(const ggml_bf16_t *) &v[d * fan + i]);
+            float vv = ggml_bf16_to_fp32(ggml_bf16_t{ v[d * fan + i] });
             nsq += vv * vv;
         }
         float s = gv / (sqrtf(nsq) + 1e-12f);
         for (int i = 0; i < fan; i++) {  // i = k_oc
-            float vv        = ggml_bf16_to_fp32(*(const ggml_bf16_t *) &v[d * fan + i]);
+            float vv        = ggml_bf16_to_fp32(ggml_bf16_t{ v[d * fan + i] });
             w[i * dim0 + d] = vv * s;    // transposed: [k_oc * IC + ic]
         }
     }
@@ -134,7 +134,7 @@ static void vae_load_snake(struct ggml_tensor * dst, const GGUFModel & gf, const
     const uint16_t *     raw = (const uint16_t *) gf_get_data(gf, name.c_str());
     std::vector<float>   d(C);
     for (int i = 0; i < C; i++) {
-        d[i] = expf(ggml_bf16_to_fp32(*(const ggml_bf16_t *) &raw[i]));
+        d[i] = expf(ggml_bf16_to_fp32(ggml_bf16_t{ raw[i] }));
     }
     ggml_backend_tensor_set(dst, d.data(), 0, C * sizeof(float));
 }
@@ -146,7 +146,7 @@ static void vae_load_snake_inv(struct ggml_tensor * dst, const GGUFModel & gf, c
     const uint16_t *     raw = (const uint16_t *) gf_get_data(gf, name.c_str());
     std::vector<float>   d(C);
     for (int i = 0; i < C; i++) {
-        d[i] = 1.0f / expf(ggml_bf16_to_fp32(*(const ggml_bf16_t *) &raw[i]));
+        d[i] = 1.0f / expf(ggml_bf16_to_fp32(ggml_bf16_t{ raw[i] }));
     }
     ggml_backend_tensor_set(dst, d.data(), 0, C * sizeof(float));
 }
@@ -158,7 +158,7 @@ static void vae_load_bias(struct ggml_tensor * dst, const GGUFModel & gf, const 
     const uint16_t *     raw = (const uint16_t *) gf_get_data(gf, name.c_str());
     std::vector<float>   d(C);
     for (int i = 0; i < C; i++) {
-        d[i] = ggml_bf16_to_fp32(*(const ggml_bf16_t *) &raw[i]);
+        d[i] = ggml_bf16_to_fp32(ggml_bf16_t{ raw[i] });
     }
     ggml_backend_tensor_set(dst, d.data(), 0, C * sizeof(float));
 }

@@ -252,7 +252,7 @@ static struct ggml_tensor * gf_load_tensor_f32(WeightCtx * wctx, const GGUFModel
     if (src->type == GGML_TYPE_BF16) {
         const uint16_t * p = (const uint16_t *) raw;
         for (size_t i = 0; i < n; i++) {
-            data[i] = ggml_bf16_to_fp32(*(const ggml_bf16_t *) &p[i]);
+            data[i] = ggml_bf16_to_fp32(ggml_bf16_t{ p[i] });
         }
     } else {
         ggml_fp16_to_fp32_row((const ggml_fp16_t *) raw, data, (int) n);

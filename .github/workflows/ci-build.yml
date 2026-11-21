@@ -62,16 +62,26 @@ jobs:
 
       - name: Run cppcheck
         run: |
-          cppcheck --enable=all --error-exitcode=1 --inline-suppr \
-          --suppress=missingIncludeSystem \
-          --suppress=missingInclude \
-          --suppress=cstyleCast \
-          --suppress=constVariable \
-          --suppress=constVariablePointer \
-          --suppress=constParameterPointer \
-          --suppress=variableScope \
-          --suppress=uselessCallsSubstr \
-          --suppress=useStlAlgorithm \
-          --suppress=shiftNegativeLHS \
-          -i ggml -i build -i .git -i mp3 \
-          .
+          set -euo pipefail
+          cppcheck --enable=all --inline-suppr \
+            --template='{file}:{line}:{column}: {severity}: {message} [{id}]' \
+            -i ggml -i build -i .git -i mp3 . > cppcheck.log 2>&1 || { cat cppcheck.log >&2; exit 1; }
+
+          # Keep vendored diagnostics visible. Cppcheck 2.19 flags two safe four-byte copies in yyjson 0.12.0.
+          awk '
+            BEGIN { failure = "cppcheck-first-party.log"; advisory = "cppcheck-advisory.log"; vendor = "cppcheck-vendor.log";
+                    printf "" > failure; printf "" > advisory; printf "" > vendor }
+            /^(vendor|mp3|ggml)\// { print > vendor; next }
+            /^[^:]+:[0-9]+:[0-9]+: (warning|error):/ { print > failure; next }
+            /^[^:]+:[0-9]+:[0-9]+:/ { print > advisory }
+          ' cppcheck.log
+          if [ -s cppcheck-first-party.log ]; then
+            cat cppcheck-first-party.log >&2
+            exit 1
+          fi
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: cppcheck-reports
+          path: cppcheck*.log

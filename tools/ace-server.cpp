@@ -1320,15 +1320,7 @@ static void decode_worker(std::shared_ptr<Job> job,
 // decode_worker, minus the audio codec at the output: the body is raw
 // latent bytes the client caches alongside its source card.
 static void encode_worker(std::shared_ptr<Job> job, AceRequest ace_req, float * src_interleaved, int src_len) {
-    struct buf_guard {
-        float * p;
-
-        ~buf_guard() {
-            if (p) {
-                free(p);
-            }
-        }
-    } buf{ src_interleaved };
+    std::unique_ptr<float, decltype(&free)> buf(src_interleaved, &free);
 
     if (job->cancel.load()) {
         job->status.store(JobStatus::CANCELLED);
@@ -1771,7 +1763,7 @@ int main(int argc, char ** argv) {
     svr.set_socket_options([](socket_t sock) {
         int one = 1;
 #ifdef _WIN32
-        setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, (const char *) &one, sizeof(one));
+        setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, reinterpret_cast<const char *>(&one), sizeof(one));
 #else
         setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
 #endif

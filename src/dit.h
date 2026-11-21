@@ -178,7 +178,7 @@ static struct ggml_tensor * dit_load_proj_in_w(WeightCtx *         wctx,
     };
     if (src->type == GGML_TYPE_BF16) {
         const uint16_t * s = (const uint16_t *) raw;
-        cvt([&](int i) { return ggml_bf16_to_fp32(*(const ggml_bf16_t *) &s[i]); });
+        cvt([&](int i) { return ggml_bf16_to_fp32(ggml_bf16_t{ s[i] }); });
     } else if (src->type == GGML_TYPE_F16) {
         const ggml_fp16_t * s = (const ggml_fp16_t *) raw;
         cvt([&](int i) { return ggml_fp16_to_fp32(s[i]); });
@@ -235,7 +235,7 @@ static struct ggml_tensor * dit_load_proj_out_w(WeightCtx *         wctx,
     };
     if (src->type == GGML_TYPE_BF16) {
         const uint16_t * s = (const uint16_t *) raw;
-        cvt([&](int i) { return ggml_bf16_to_fp32(*(const ggml_bf16_t *) &s[i]); });
+        cvt([&](int i) { return ggml_bf16_to_fp32(ggml_bf16_t{ s[i] }); });
     } else if (src->type == GGML_TYPE_F16) {
         const ggml_fp16_t * s = (const ggml_fp16_t *) raw;
         cvt([&](int i) { return ggml_fp16_to_fp32(s[i]); });

@@ -122,6 +122,10 @@ jobs:
           fi
           cmake -S . -B build "${flags[@]}"
           cmake --build build --parallel 4
+          if [[ "$RUNNER_OS" == Windows && -f tests/test-adapter-path.cpp ]]; then
+            cmake --build build --target test-adapter-path
+            ./build/test-adapter-path.exe
+          fi
           mkdir dist
           ext=
           if [[ "$RUNNER_OS" == Windows ]]; then ext=.exe; fi
